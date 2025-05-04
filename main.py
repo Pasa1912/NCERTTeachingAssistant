@@ -2,6 +2,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
 import os
+import zipfile
+import requests
+
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_chroma import Chroma
 from langchain.prompts import ChatPromptTemplate
@@ -11,38 +14,52 @@ from langchain.retrievers.document_compressors import LLMChainExtractor
 
 app = FastAPI()
 
-# Initialize Groq API client
-groq_api_key = "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"
+# -- Configs --
+GCS_ZIP_URL = "https://storage.googleapis.com/nsmr-chroma-store/chroma/chroma_db.zip"  # CHANGE THIS
+VECTOR_DB_DIR = "vector_db"
+VECTOR_DB_ZIP = "chroma_db.zip"
+GROQ_API_KEY = "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"
 
-# Function to load vector database
-def load_vector_db(vector_db_path):
+# -- Step 1: Download + Extract Vector DB from GCS --
+def download_and_extract_vector_db():
+    if not os.path.exists(VECTOR_DB_DIR):
+        print("Downloading vector DB from GCS...")
+        r = requests.get(GCS_ZIP_URL)
+        with open(VECTOR_DB_ZIP, "wb") as f:
+            f.write(r.content)
+
+        print("Extracting vector DB...")
+        with zipfile.ZipFile(VECTOR_DB_ZIP, "r") as zip_ref:
+            zip_ref.extractall(VECTOR_DB_DIR)
+
+        print("Vector DB ready.")
+
+# -- Step 2: Initialize Vector DB --
+def load_vector_db():
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
-    vector_db = Chroma(persist_directory=vector_db_path, embedding_function=embeddings)
-    return vector_db
+    return Chroma(persist_directory=VECTOR_DB_DIR, embedding_function=embeddings)
 
-# Initialize vector database
-vector_db_path = "vector_db"
-vector_db = load_vector_db(vector_db_path)
-print("Vector database loaded successfully\n")
+# -- Execute Initialization --
+download_and_extract_vector_db()
+vector_db = load_vector_db()
+print("Vector database loaded successfully")
 
-# Setup re-ranking
-llm = ChatGroq(
-    groq_api_key=groq_api_key,
-    model="llama3-8b-8192"
-)
+# -- Setup LLM Re-ranking --
+llm = ChatGroq(groq_api_key=GROQ_API_KEY, model="llama3-8b-8192")
 compressor = LLMChainExtractor.from_llm(llm)
 compression_retriever = ContextualCompressionRetriever(
     base_compressor=compressor,
     base_retriever=vector_db.as_retriever(search_kwargs={"k": 5})
 )
 
-# Define the template for responding with document context
+# -- Prompt --
 template = """Answer the question based ONLY on the following context:
 {context}
 Question: {question}
 """
 prompt = ChatPromptTemplate.from_template(template)
 
+# -- Request/Response Models --
 class Query(BaseModel):
     question: str
 
@@ -55,39 +72,27 @@ class Response(BaseModel):
     answer: str
     retrieved_documents: List[DocumentInfo]
 
+# -- Endpoint --
 @app.post("/ask", response_model=Response)
 async def ask_question(query: Query):
     try:
-        # Retrieve and re-rank documents
         retrieved_docs = compression_retriever.get_relevant_documents(query.question)
-        
-        # Collect the links and areas (metadata) where the text was found
-        doc_info = []
-        for doc in retrieved_docs:
-            page_number = doc.metadata.get('page', 'N/A')
-            doc_link = doc.metadata.get('source', 'N/A')
-            doc_info.append(DocumentInfo(
-                page=str(page_number),
-                link=doc_link,
+        doc_info = [
+            DocumentInfo(
+                page=str(doc.metadata.get('page', 'N/A')),
+                link=doc.metadata.get('source', 'N/A'),
                 snippet=doc.page_content
-            ))
-        
-        # Combine the content of the retrieved documents
+            )
+            for doc in retrieved_docs
+        ]
         context = "\n\n".join([doc.page_content for doc in retrieved_docs])
-        
-        # Prepare the prompt with the retrieved context
         formatted_prompt = prompt.format(context=context, question=query.question)
-        
-        # Generate the response using Groq API
         response = llm.invoke(formatted_prompt)
-        
-        # Extract the content from the AIMessage
         answer = response.content if hasattr(response, 'content') else str(response)
-        
         return Response(answer=answer, retrieved_documents=doc_info)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
