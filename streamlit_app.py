@@ -4,7 +4,7 @@ import requests
 import json
 
 # Set the FastAPI backend URL
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = "https://ncert-rag-fastapi-1011288595045.us-central1.run.app"
 
 st.title("NCERT Teaching Assistant")
 
