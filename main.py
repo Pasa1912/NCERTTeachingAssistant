@@ -5,7 +5,7 @@ import os
 import zipfile
 import requests
 
-from langchain_community.embeddings import OllamaEmbeddings
+from remote_ollama_embedding import RemoteOllamaEmbeddings
 from langchain_chroma import Chroma
 from langchain.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
@@ -16,6 +16,7 @@ app = FastAPI()
 
 # -- Configs --
 GCS_ZIP_URL = "https://storage.googleapis.com/nsmr-chroma-store/chroma/chroma_db.zip"  # CHANGE THIS
+OLLAMA_API_URL = "https://ollama-api-1011288595045.us-central1.run.app"
 VECTOR_DB_DIR = "vector_db"
 VECTOR_DB_ZIP = "chroma_db.zip"
 GROQ_API_KEY = "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"
@@ -36,7 +37,7 @@ def download_and_extract_vector_db():
 
 # -- Step 2: Initialize Vector DB --
 def load_vector_db():
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
+    embeddings = RemoteOllamaEmbeddings(base_url=OLLAMA_API_URL, model="nomic-embed-text")
     return Chroma(persist_directory=VECTOR_DB_DIR, embedding_function=embeddings)
 
 # -- Execute Initialization --

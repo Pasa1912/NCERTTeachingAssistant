@@ -8,5 +8,3 @@ pydantic
 langchain-chroma
 langchain-groq
 uvicorn
-
-gs://nsmr-chroma-store
